@@ -1,4 +1,4 @@
-name: RDP
+name: Secure-RDP
 
 on:
   workflow_dispatch:
@@ -24,21 +24,24 @@ jobs:
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
             /v UserAuthentication /t REG_DWORD /d 0 /f
 
-          # Set security layer
+          # Set Security Layer
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
             /v SecurityLayer /t REG_DWORD /d 0 /f
 
-          # Enable firewall rules
+          # Enable Remote Desktop firewall rules
           netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
 
-          # Open port 3389 manually
+          # Open RDP port manually
           netsh advfirewall firewall add rule name="RDP-3389" `
             dir=in action=allow protocol=TCP localport=3389
 
-          # Start RDP service
-          sc config TermService start= auto
-          net start TermService
+          # Configure RDP service
+          cmd /c 'sc config TermService start= auto'
 
+          # Start RDP service
+          cmd /c 'net start TermService'
+
+          # Restart service
           Restart-Service TermService -Force
 
           Start-Sleep 10
@@ -49,7 +52,7 @@ jobs:
           Write-Host "=== PORT CHECK ==="
           netstat -ano | findstr 3389
 
-          Write-Host "=== LOCAL TEST ==="
+          Write-Host "=== LOCAL RDP TEST ==="
           Test-NetConnection localhost -Port 3389
 
       - name: Create RDP User
@@ -92,15 +95,18 @@ jobs:
             --accept-dns=false `
             --reset
 
-          Start-Sleep -Seconds 15
+          Start-Sleep 15
 
           Write-Host "=== TAILSCALE STATUS ==="
+
           & $ts status
 
           $ip = & $ts ip -4
 
           if (-not $ip) {
-            Write-Error "TAILSCALE FAILED"
+
+            Write-Error "TAILSCALE CONNECTION FAILED"
+
             exit 1
           }
 
@@ -118,7 +124,7 @@ jobs:
           Write-Host "=== NETSTAT ==="
           netstat -ano | findstr 3389
 
-          Write-Host "=== FIREWALL ==="
+          Write-Host "=== FIREWALL RULES ==="
           Get-NetFirewallRule | Where-Object {$_.DisplayName -like "*Remote*"}
 
           Write-Host "=== LOCALHOST TEST ==="
