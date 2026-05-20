@@ -1,0 +1,153 @@
+name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-2022
+    timeout-minutes: 360
+
+    steps:
+
+      - name: Enable Full RDP Access
+        shell: powershell
+        run: |
+
+          Write-Host "=== ENABLING RDP ==="
+
+          # Enable RDP
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" `
+            /v fDenyTSConnections /t REG_DWORD /d 0 /f
+
+          # Disable NLA
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+            /v UserAuthentication /t REG_DWORD /d 0 /f
+
+          # Set security layer
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+            /v SecurityLayer /t REG_DWORD /d 0 /f
+
+          # Enable firewall rules
+          netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
+
+          # Open port 3389 manually
+          netsh advfirewall firewall add rule name="RDP-3389" `
+            dir=in action=allow protocol=TCP localport=3389
+
+          # Start RDP service
+          sc config TermService start= auto
+          net start TermService
+
+          Restart-Service TermService -Force
+
+          Start-Sleep 10
+
+          Write-Host "=== RDP STATUS ==="
+          Get-Service TermService
+
+          Write-Host "=== PORT CHECK ==="
+          netstat -ano | findstr 3389
+
+          Write-Host "=== LOCAL TEST ==="
+          Test-NetConnection localhost -Port 3389
+
+      - name: Create RDP User
+        shell: powershell
+        run: |
+
+          $password = "P@ssw0rd123!"
+
+          net user RDP $password /add
+
+          net localgroup Administrators RDP /add
+
+          net localgroup "Remote Desktop Users" RDP /add
+
+          echo "RDP_USER=RDP" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
+        shell: powershell
+        run: |
+
+          Invoke-WebRequest `
+            https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi `
+            -OutFile tailscale.msi
+
+          Start-Process msiexec.exe `
+            -ArgumentList "/i tailscale.msi /quiet /norestart" `
+            -Wait
+
+      - name: Connect Tailscale
+        shell: powershell
+        run: |
+
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          & $ts up `
+            --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" `
+            --hostname="github-rdp-$env:GITHUB_RUN_ID" `
+            --accept-routes `
+            --accept-dns=false `
+            --reset
+
+          Start-Sleep -Seconds 15
+
+          Write-Host "=== TAILSCALE STATUS ==="
+          & $ts status
+
+          $ip = & $ts ip -4
+
+          if (-not $ip) {
+            Write-Error "TAILSCALE FAILED"
+            exit 1
+          }
+
+          echo "TS_IP=$ip" >> $env:GITHUB_ENV
+
+          Write-Host "TAILSCALE IP: $ip"
+
+      - name: Deep Network Debug
+        shell: powershell
+        run: |
+
+          Write-Host "=== IPCONFIG ==="
+          ipconfig
+
+          Write-Host "=== NETSTAT ==="
+          netstat -ano | findstr 3389
+
+          Write-Host "=== FIREWALL ==="
+          Get-NetFirewallRule | Where-Object {$_.DisplayName -like "*Remote*"}
+
+          Write-Host "=== LOCALHOST TEST ==="
+          Test-NetConnection localhost -Port 3389
+
+          Write-Host "=== TAILSCALE TEST ==="
+          Test-NetConnection $env:TS_IP -Port 3389
+
+      - name: Show RDP Credentials
+        shell: powershell
+        run: |
+
+          Write-Host ""
+          Write-Host "====================================="
+          Write-Host "RDP IS READY"
+          Write-Host "====================================="
+          Write-Host "IP: $env:TS_IP"
+          Write-Host "USERNAME: .\RDP"
+          Write-Host "PASSWORD: $env:RDP_PASS"
+          Write-Host "====================================="
+
+      - name: Keep Runner Alive
+        shell: powershell
+        run: |
+
+          while ($true) {
+
+            Write-Host "[$(Get-Date)] RUNNER ACTIVE"
+
+            Start-Sleep 300
+
+          }
